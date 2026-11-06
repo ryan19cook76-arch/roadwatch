@@ -1,0 +1,521 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RoadWatch</title>
+
+  <link rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+  <style>
+    body {
+      margin: 0;
+      background: #101827;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+
+    header {
+      padding: 20px;
+      background: #17253a;
+      text-align: center;
+    }
+
+    h1 { margin: 0; color: #38bdf8; }
+
+    p { color: #cbd5e1; }
+
+    #map {
+      height: 65vh;
+      width: 100%;
+    }
+
+    button {
+      background: #0284c7;
+      border: none;
+      border-radius: 8px;
+      color: white;
+      padding: 14px 24px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    .controls {
+      padding: 20px;
+      text-align: center;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>ROADWATCH</h1>
+    <p>Community Traffic Awareness</p>
+  </header>
+
+  <div id="map"></div>
+
+  <div class="controls">
+    <button onclick="findMe()">Find My Location</button>
+    
+<button onclick="startReport()">Report Police Activity</button>
+
+    <p id="status">RoadWatch map ready.</p>
+    
+<p id="alertMessage"
+   style="color:#facc15;font-weight:bold;">
+  Proximity alerts ready.
+</p>
+<button onclick="enableVoiceAlerts()">
+  Enable Voice Alerts
+</button>
+
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    const map = L.map("map").setView(
+      [34.2694, -118.7815], 13
+    );
+
+    L.tileLayer(
+      "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      {
+        attribution: "&copy; OpenStreetMap contributors",
+        maxZoom: 19
+      }
+    ).addTo(map);
+
+    // Sample historical enforcement location
+    L.marker([34.2694, -118.7815])
+      .addTo(map)
+      .bindPopup(
+        "<b>RoadWatch Sample Alert</b><br>" +
+        "Historical enforcement area.<br>" +
+        "Not a confirmed live sighting."
+      );
+
+    
+  
+let locationMarker = null;
+let accuracyCircle = null;
+let trackingId = null;
+
+function findMe() {
+  const status = document.getElementById("status");
+
+  if (!navigator.geolocation) {
+    status.textContent = "Location tracking is unavailable.";
+    return;
+  }
+
+  if (trackingId !== null) {
+    navigator.geolocation.clearWatch(trackingId);
+    trackingId = null;
+    status.textContent = "Live location tracking stopped.";
+    return;
+  }
+
+  status.textContent = "Starting live GPS tracking...";
+
+  trackingId = navigator.geolocation.watchPosition(
+    position => {
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      
+const accuracy = position.coords.accuracy;
+
+      
+const heading = position.coords.heading;
+const speed = position.coords.speed;
+
+if (
+  heading !== null &&
+  Number.isFinite(heading) &&
+  speed !== null &&
+  speed > 1.5
+) {
+  currentHeading = heading;
+} else {
+  currentHeading = null;
+}
+
+
+      if (locationMarker === null) {
+        locationMarker = L.circleMarker([lat, lon], {
+          radius: 9,
+          color: "white",
+          weight: 3,
+          fillColor: "#0284c7",
+          fillOpacity: 1
+        }).addTo(map);
+
+        accuracyCircle = L.circle([lat, lon], {
+          radius: accuracy,
+          color: "#38bdf8",
+          fillColor: "#38bdf8",
+          fillOpacity: 0.15,
+          weight: 1
+        }).addTo(map);
+
+        map.setView([lat, lon], 16);
+      } else {
+        locationMarker.setLatLng([lat, lon]);
+        accuracyCircle.setLatLng([lat, lon]);
+        accuracyCircle.setRadius(accuracy);
+      }
+
+      const accuracyFeet = Math.round(accuracy * 3.28084);
+
+      status.textContent =
+        "LIVE TRACKING ON | Accuracy: approximately " +
+        accuracyFeet + " feet";
+    },
+    error => {
+      status.textContent =
+        "Location error: " + error.message;
+
+      if (error.code === 1) {
+        navigator.geolocation.clearWatch(trackingId);
+        trackingId = null;
+      }
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 15000
+    }
+  );
+}
+
+ 
+let reportingMode = false;
+const STORAGE_KEY = "roadwatch_reports_v1";
+
+function startReport() {
+  reportingMode = true;
+  document.getElementById("status").textContent =
+    "Click a location on the map to report police activity.";
+}
+
+// Safely display report text in HTML
+function escapeHTML(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Draw a saved report on the map
+function showReport(report) {
+  L.marker([report.lat, report.lon])
+    .addTo(map)
+    .bindPopup(
+      "<b>Community Report (Demo)</b><br>" +
+      "Type: " + escapeHTML(report.type) + "<br>" +
+      "Reported: " +
+      new Date(report.timestamp).toLocaleString()
+    );
+}
+
+// Load previously saved reports
+let savedReports = [];
+
+try {
+  savedReports = JSON.parse(
+    localStorage.getItem(STORAGE_KEY) || "[]"
+  );
+
+  if (!Array.isArray(savedReports)) {
+    savedReports = [];
+  }
+} catch (error) {
+  savedReports = [];
+}
+
+
+
+const alertedReports = new Set();
+
+const REPORT_LIFETIME_MS = 60 * 60 * 1000;
+const activeReportMarkers = [];
+
+function removeExpiredReports() {
+  const now = Date.now();
+
+  // Keep only valid reports younger than 60 minutes
+  savedReports = savedReports.filter(report => {
+    const reportedAt = Date.parse(report.timestamp);
+
+    return (
+      Number.isFinite(reportedAt) &&
+      reportedAt <= now &&
+      now - reportedAt < REPORT_LIFETIME_MS &&
+      Number.isFinite(report.lat) &&
+      Number.isFinite(report.lon)
+    );
+  });
+
+  // Remove previously displayed community markers
+  activeReportMarkers.forEach(marker => {
+    map.removeLayer(marker);
+  });
+  activeReportMarkers.length = 0;
+
+  // Redraw only active community reports
+  savedReports.forEach(report => {
+    const marker = L.marker([report.lat, report.lon])
+      .addTo(map)
+      .bindPopup(
+        "<b>Community Report</b><br>" +
+        "Type: " + escapeHTML(report.type) + "<br>" +
+        "Reported: " +
+        new Date(report.timestamp).toLocaleString()
+      );
+
+    activeReportMarkers.push(marker);
+  });
+
+  // Keep local storage synchronized
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(savedReports)
+    );
+  } catch (error) {
+    console.warn("Could not update saved reports.", error);
+  }
+
+  // Clear proximity-alert history after reports expire
+  if (typeof alertedReports !== "undefined") {
+    const activeIds = new Set(
+      savedReports.map(report =>
+        report.timestamp + ":" + report.lat + ":" + report.lon
+      )
+    );
+
+    for (const id of alertedReports) {
+      if (!activeIds.has(id)) {
+        alertedReports.delete(id);
+      }
+    }
+  }
+}
+
+// Check immediately and every 15 seconds
+removeExpiredReports();
+setInterval(removeExpiredReports, 15000);
+
+
+// Handle clicks when reporting
+map.on("click", function(event) {
+  if (!reportingMode) return;
+
+  reportingMode = false;
+
+  const reportType = prompt(
+    "Type of activity? (Speed trap, Traffic stop, or Other)",
+    "Speed trap"
+  );
+
+  if (reportType === null) {
+    document.getElementById("status").textContent =
+      "Report canceled.";
+    return;
+  }
+
+  const report = {
+    lat: event.latlng.lat,
+    lon: event.latlng.lng,
+    type: reportType.trim() || "Other",
+    timestamp: new Date().toISOString()
+  };
+
+  savedReports.push(report);
+
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(savedReports)
+    );
+
+    
+removeExpiredReports();
+
+
+    document.getElementById("status").textContent =
+      "Report saved successfully!";
+  } catch (error) {
+    savedReports.pop();
+    document.getElementById("status").textContent =
+      "Could not save report. Browser storage unavailable.";
+  }
+});
+
+
+const ALERT_RADIUS_METERS = 804.672; // Half a mile
+let voiceAlertsEnabled = false;
+
+// Enable spoken notifications
+function enableVoiceAlerts() {
+  voiceAlertsEnabled = true;
+
+  document.getElementById("alertMessage").textContent =
+    "Voice alerts enabled. Monitoring nearby reports.";
+
+  if ("speechSynthesis" in window) {
+    speechSynthesis.speak(
+      new SpeechSynthesisUtterance(
+        "RoadWatch voice alerts enabled."
+      )
+    );
+  }
+}
+
+// Calculate distance between two GPS coordinates
+function distanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = value => value * Math.PI / 180;
+
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) *
+    Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) ** 2;
+
+  return 2 * R * Math.atan2(
+    Math.sqrt(a),
+    Math.sqrt(1 - a)
+  );
+}
+
+// Check distance to saved reports
+
+function bearingToLocation(lat1, lon1, lat2, lon2) {
+  const toRad = degrees => degrees * Math.PI / 180;
+  const toDeg = radians => radians * 180 / Math.PI;
+
+  const dLon = toRad(lon2 - lon1);
+
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+
+  const x =
+    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.cos(dLon);
+
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function isLocationAhead(lat1, lon1, lat2, lon2) {
+  if (!Number.isFinite(currentHeading)) {
+    return null;
+  }
+
+  const bearing = bearingToLocation(
+    lat1, lon1, lat2, lon2
+  );
+
+  const difference = Math.abs(
+    ((bearing - currentHeading + 540) % 360) - 180
+  );
+
+  // Within 60 degrees of travel direction
+  return difference <= 60;
+}
+
+function checkNearbyReports() {
+  if (!locationMarker) return;
+
+  const current = locationMarker.getLatLng();
+  let closest = null;
+  let closestDistance = Infinity;
+
+  savedReports.forEach(report => {
+    const id = report.timestamp + ":" +
+      report.lat + ":" + report.lon;
+
+    const distance = distanceMeters(
+      current.lat,
+      current.lng,
+      report.lat,
+      report.lon
+    );
+
+    if (distance < closestDistance) {
+      closest = report;
+      closestDistance = distance;
+    }
+
+    if (distance > ALERT_RADIUS_METERS * 1.25) {
+      alertedReports.delete(id);
+    }
+
+    
+const ahead = isLocationAhead(
+  current.lat,
+  current.lng,
+  report.lat,
+  report.lon
+);
+
+const shouldAlert =
+  distance <= ALERT_RADIUS_METERS &&
+  ahead !== false &&
+  !alertedReports.has(id);
+
+    if (shouldAlert) {
+      
+      alertedReports.add(id);
+
+      if (voiceAlertsEnabled &&
+
+
+
+
+          "speechSynthesis" in window) {
+        const message = new SpeechSynthesisUtterance(
+          "RoadWatch alert. A reported enforcement " +
+          "location is nearby."
+        );
+
+        speechSynthesis.speak(message);
+      }
+    }
+  });
+
+  const display = document.getElementById(
+    "alertMessage"
+  );
+
+  if (
+    closest &&
+    closestDistance <= ALERT_RADIUS_METERS
+  ) {
+    const feet = Math.round(
+      closestDistance * 3.28084
+    );
+
+    display.textContent =
+      "ROADWATCH ALERT: Saved report approximately " +
+      feet + " feet away. Not verified as active.";
+  } else {
+    display.textContent =
+      "No saved reports within half a mile.";
+  }
+}
+
+// Check every five seconds
+setInterval(checkNearbyReports, 5000);
+
+</script>
+</body>
+</html>
