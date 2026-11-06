@@ -68,6 +68,11 @@
    style="color:#facc15;font-weight:bold;">
   Proximity alerts ready.
 </p>
+
+<p id="cloudStatus">
+  Connecting to RoadWatch cloud...
+</p>
+
 <button onclick="enableVoiceAlerts()">
   Enable Voice Alerts
 </button>
@@ -75,6 +80,8 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <script>
     const map = L.map("map").setView(
@@ -338,6 +345,8 @@ map.on("click", function(event) {
 
   savedReports.push(report);
 
+submitCloudReport(report);
+
   try {
     localStorage.setItem(
       STORAGE_KEY,
@@ -515,6 +524,147 @@ const shouldAlert =
 
 // Check every five seconds
 setInterval(checkNearbyReports, 5000);
+
+
+const SUPABASE_URL = "https://velzxxxtiouztmhregco.supabase.co";
+const SUPABASE_KEY = "sb_publishable_ReEp7UxGyveLKqu6uMoUqQ_8mDOXlis";
+
+async function testCloudConnection() {
+  const status = document.getElementById("cloudStatus");
+
+  try {
+    const response = await fetch(
+      SUPABASE_URL + "/rest/v1/reports?select=id&limit=1",
+      {
+        headers: {
+          apikey: SUPABASE_KEY
+        }
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status);
+    }
+
+    status.textContent = "Cloud database connected!";
+  } catch (error) {
+    status.textContent =
+      "Cloud connection failed: " + error.message;
+  }
+}
+
+testCloudConnection();
+
+const roadwatchClient = window.supabase.createClient(
+  SUPABASE_URL,
+  SUPABASE_KEY
+);
+
+async function signInToRoadWatch() {
+  const status = document.getElementById("cloudStatus");
+
+  try {
+    const { data: existing } =
+      await roadwatchClient.auth.getSession();
+
+    if (existing.session) {
+      status.textContent =
+        "RoadWatch cloud account connected!";
+      return;
+    }
+
+    const { error } =
+      await roadwatchClient.auth.signInAnonymously();
+
+    if (error) throw error;
+
+    status.textContent =
+      "RoadWatch anonymous sign-in successful!";
+  } catch (error) {
+    status.textContent =
+      "RoadWatch sign-in failed: " + error.message;
+  }
+}
+
+signInToRoadWatch();
+
+async function submitCloudReport(report) {
+  const status = document.getElementById("cloudStatus");
+
+  try {
+    const { data: sessionData } =
+      await roadwatchClient.auth.getSession();
+
+    if (!sessionData.session) {
+      status.textContent =
+        "Cloud report not sent: sign-in required.";
+      return;
+    }
+
+    const { error } = await roadwatchClient
+      .from("reports")
+      .insert({
+        latitude: report.lat,
+        longitude: report.lon,
+        report_type: report.type
+      });
+
+    if (error) throw error;
+
+    status.textContent =
+      "Community report submitted to cloud!";
+  } catch (error) {
+    status.textContent =
+      "Cloud report failed: " + error.message;
+  }
+}
+
+const cloudReportMarkers = L.layerGroup().addTo(map);
+let cloudReports = [];
+
+async function loadCloudReports() {
+  try {
+    const { data, error } = await roadwatchClient
+      .from("reports")
+      .select("id, latitude, longitude, report_type, created_at")
+      .gt("expires_at", new Date().toISOString())
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    if (error) throw error;
+
+    cloudReports = data || [];
+    cloudReportMarkers.clearLayers();
+
+    cloudReports.forEach(report => {
+      const marker = L.marker([
+        report.latitude,
+        report.longitude
+      ]);
+
+      marker.bindPopup(
+        "<b>RoadWatch Community Report</b><br>" +
+        "Type: " + escapeHTML(report.report_type) +
+        "<br>Reported: " +
+        new Date(report.created_at).toLocaleString() +
+        "<br>Status: Unverified"
+      );
+
+      cloudReportMarkers.addLayer(marker);
+    });
+
+    document.getElementById("cloudStatus").textContent =
+      "Cloud connected — " +
+      cloudReports.length + " active community reports.";
+
+  } catch (error) {
+    document.getElementById("cloudStatus").textContent =
+      "Cloud reports unavailable: " + error.message;
+  }
+}
+
+loadCloudReports();
+setInterval(loadCloudReports, 15000);
 
 </script>
 </body>
