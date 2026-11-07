@@ -312,7 +312,9 @@ setInterval(removeExpiredReports, 15000);
 
 
 // Handle clicks when reporting
-map.on("click", function(event) {
+map.on("click", async function(event) {
+    
+
   if (!reportingMode) return;
 
   reportingMode = false;
@@ -335,9 +337,42 @@ map.on("click", function(event) {
     timestamp: new Date().toISOString()
   };
 
+  
+const duplicateLocal = savedReports.some(existing => {
+  const ageMs =
+    Date.now() - new Date(existing.timestamp).getTime();
+
+  return (
+    existing.type === report.type &&
+    ageMs >= 0 &&
+    ageMs <= 5 * 60 * 1000 &&
+    getDistanceMeters(
+      report.lat,
+      report.lon,
+      existing.lat,
+      existing.lon
+    ) <= 91.44
+  );
+});
+
+if (duplicateLocal) {
+  document.getElementById("status").textContent =
+    "Nearby report already exists — duplicate avoided.";
+  return;
+}
+
   savedReports.push(report);
 
-submitCloudReport(report);
+
+const cloudAccepted = await submitCloudReport(report);
+
+if (!cloudAccepted) {
+  savedReports.pop();
+  return;
+}
+
+
+
 
   try {
     localStorage.setItem(
@@ -654,6 +689,26 @@ async function signInToRoadWatch() {
 
 signInToRoadWatch();
 
+
+function getDistanceMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRadians = degrees => degrees * Math.PI / 180;
+
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) *
+    Math.cos(toRadians(lat2)) *
+    Math.sin(dLon / 2) ** 2;
+
+  return 2 * R * Math.atan2(
+    Math.sqrt(a),
+    Math.sqrt(1 - a)
+  );
+}
+
 async function submitCloudReport(report) {
   const status = document.getElementById("cloudStatus");
 
@@ -664,8 +719,39 @@ async function submitCloudReport(report) {
     if (!sessionData.session) {
       status.textContent =
         "Cloud report not sent: sign-in required.";
-      return;
+      return false;
     }
+
+    
+const fiveMinutesAgo = new Date(
+  Date.now() - 5 * 60 * 1000
+).toISOString();
+
+const { data: nearbyReports, error: lookupError } =
+  await roadwatchClient
+    .from("reports")
+    .select("latitude, longitude, report_type, created_at")
+    .eq("report_type", report.type)
+    .gte("created_at", fiveMinutesAgo);
+
+if (lookupError) throw lookupError;
+
+const duplicate = (nearbyReports || []).some(existing => {
+  const distance = getDistanceMeters(
+    report.lat,
+    report.lon,
+    existing.latitude,
+    existing.longitude
+  );
+
+  return distance <= 91.44;
+});
+
+if (duplicate) {
+  status.textContent =
+    "Nearby report already exists — duplicate avoided.";
+return false;
+}
 
     const { error } = await roadwatchClient
       .from("reports")
@@ -679,9 +765,13 @@ async function submitCloudReport(report) {
 
     status.textContent =
       "Community report submitted to cloud!";
+      return true;
+  
   } catch (error) {
+  
     status.textContent =
       "Cloud report failed: " + error.message;
+      return false;
   }
 }
 
