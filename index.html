@@ -790,7 +790,32 @@ async function loadCloudReports() {
     if (error) throw error;
 
     cloudReports = data || [];
-    cloudReportMarkers.clearLayers();
+    
+
+const { data: votes, error: votesError } =
+  await roadwatchClient
+    .from("report_votes")
+    .select("report_id, vote");
+
+if (votesError) throw votesError;
+
+const voteCounts = {};
+
+(votes || []).forEach(item => {
+  if (!voteCounts[item.report_id]) {
+    voteCounts[item.report_id] = {
+      still_there: 0,
+      gone: 0
+    };
+  }
+
+  if (item.vote === "still_there") {
+    voteCounts[item.report_id].still_there++;
+  } else if (item.vote === "gone") {
+    voteCounts[item.report_id].gone++;
+  }
+});
+
 
     cloudReports.forEach(report => {
       const marker = L.marker([
@@ -798,13 +823,37 @@ async function loadCloudReports() {
         report.longitude
       ]);
 
-      marker.bindPopup(
-        "<b>RoadWatch Community Report</b><br>" +
-        "Type: " + escapeHTML(report.report_type) +
-        "<br>Reported: " +
-        new Date(report.created_at).toLocaleString() +
-        "<br>Status: Unverified"
-      );
+    
+marker.bindPopup(
+  "<b>RoadWatch Community Report</b><br>" +
+  "Type: " + escapeHTML(report.report_type) +
+  "<br>Reported: " +
+  new Date(report.created_at).toLocaleString() +
+  
+"<br>Status: Community reported" +
+"<br>Still There: " +
+(voteCounts[report.id]?.still_there || 0) +
+" confirmations" +
+"<br>No Longer There: " +
+(voteCounts[report.id]?.gone || 0) +
+" reports" +
+
+  "<br><br>" +
+  "<button class='roadwatch-vote' data-vote='still_there'>Still There</button> " +
+  "<button class='roadwatch-vote' data-vote='gone'>No Longer There</button>"
+);
+
+marker.on("popupopen", function(event) {
+  const popup = event.popup.getElement();
+
+  popup.querySelectorAll(".roadwatch-vote").forEach(button => {
+    button.addEventListener("click", async function() {
+      const vote = button.dataset.vote;
+      await submitReportVote(report.id, vote);
+    });
+  });
+});
+
 
       cloudReportMarkers.addLayer(marker);
     });
@@ -821,6 +870,48 @@ async function loadCloudReports() {
 
 loadCloudReports();
 setInterval(loadCloudReports, 15000);
+
+
+async function submitReportVote(reportId, vote) {
+  if (!["still_there", "gone"].includes(vote)) {
+    return;
+  }
+
+  try {
+    const { data: sessionData, error: sessionError } =
+      await roadwatchClient.auth.getSession();
+
+    if (sessionError) throw sessionError;
+
+    if (!sessionData.session) {
+      alert("Cloud sign-in required to vote.");
+      return;
+    }
+
+    const { error } = await roadwatchClient
+      .from("report_votes")
+      .insert({
+        report_id: reportId,
+        vote: vote
+      });
+
+    if (error) {
+      if (error.code === "23505") {
+        alert("You already voted on this report.");
+        return;
+      }
+      throw error;
+    }
+
+    alert(
+      vote === "still_there"
+        ? "Thank you! You confirmed this report."
+        : "Thank you! You flagged this report as no longer there."
+    );
+  } catch (error) {
+    alert("Could not submit vote: " + error.message);
+  }
+}
 
 function muteRoadWatch() {
   voiceAlertsEnabled = false;
