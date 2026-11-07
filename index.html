@@ -790,6 +790,7 @@ async function loadCloudReports() {
     if (error) throw error;
 
     cloudReports = data || [];
+    cloudReportMarkers.clearLayers();
     
 
 const { data: votes, error: votesError } =
