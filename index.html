@@ -73,6 +73,11 @@
   Connecting to RoadWatch cloud...
 </p>
 
+
+<button onclick="muteRoadWatch()">
+  STOP VOICE ALERTS
+</button>
+
 <button onclick="enableVoiceAlerts()">
   Enable Voice Alerts
 </button>
@@ -298,20 +303,7 @@ function removeExpiredReports() {
     console.warn("Could not update saved reports.", error);
   }
 
-  // Clear proximity-alert history after reports expire
-  if (typeof alertedReports !== "undefined") {
-    const activeIds = new Set(
-      savedReports.map(report =>
-        report.timestamp + ":" + report.lat + ":" + report.lon
-      )
-    );
 
-    for (const id of alertedReports) {
-      if (!activeIds.has(id)) {
-        alertedReports.delete(id);
-      }
-    }
-  }
 }
 
 // Check immediately and every 15 seconds
@@ -448,7 +440,46 @@ function checkNearbyReports() {
   let closest = null;
   let closestDistance = Infinity;
 
-  savedReports.forEach(report => {
+  
+const now = Date.now();
+
+// Convert shared cloud reports to the same format
+// as locally saved reports.
+const sharedReports = cloudReports
+  .filter(report =>
+    now - Date.parse(report.created_at) <
+    REPORT_LIFETIME_MS
+  )
+  .map(report => ({
+    lat: report.latitude,
+    lon: report.longitude,
+    type: report.report_type,
+    timestamp: report.created_at
+  }));
+
+// Avoid processing a local copy of the same
+// report that was already uploaded to the cloud.
+const uniqueLocalReports = savedReports.filter(local =>
+  !sharedReports.some(shared =>
+    distanceMeters(
+      local.lat, local.lon,
+      shared.lat, shared.lon
+    ) < 25 &&
+    Math.abs(
+      Date.parse(local.timestamp) -
+      Date.parse(shared.timestamp)
+    ) < 120000
+  )
+);
+
+// Check both shared and local reports.
+const reportsToCheck = [
+  ...sharedReports,
+  ...uniqueLocalReports
+];
+
+reportsToCheck.forEach(report => {
+
     const id = report.timestamp + ":" +
       report.lat + ":" + report.lon;
 
@@ -483,20 +514,55 @@ const shouldAlert =
 
     if (shouldAlert) {
       
-      alertedReports.add(id);
+const cooldownKey = "roadwatch_voice_" + id;
+const lastAlert = Number(
+  sessionStorage.getItem(cooldownKey) || 0
+);
 
-      if (voiceAlertsEnabled &&
+const cooldownMs = 30 * 60 * 1000;
+
+if (Date.now() - lastAlert < cooldownMs) {
+  return;
+}
+
+
+
+   
 
 
 
 
-          "speechSynthesis" in window) {
+
+  if (voiceAlertsEnabled &&
+    "speechSynthesis" in window) {
         const message = new SpeechSynthesisUtterance(
           "RoadWatch alert. A reported enforcement " +
-          "location is nearby."
+        "location is nearby."
         );
+alertedReports.add(id);
+sessionStorage.setItem(
+  cooldownKey,
+  String(Date.now())
+);
 
-        speechSynthesis.speak(message);
+  
+const GLOBAL_COOLDOWN_MS = 5 * 60 * 1000;
+const globalAlertKey = "roadwatch_last_voice_alert";
+
+const lastGlobalAlert = Number(
+  sessionStorage.getItem(globalAlertKey) || 0
+);
+
+if (Date.now() - lastGlobalAlert >= GLOBAL_COOLDOWN_MS) {
+  sessionStorage.setItem(
+    globalAlertKey,
+    String(Date.now())
+  );
+
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(message);
+}
+
       }
     }
   });
@@ -665,6 +731,17 @@ async function loadCloudReports() {
 
 loadCloudReports();
 setInterval(loadCloudReports, 15000);
+
+function muteRoadWatch() {
+  voiceAlertsEnabled = false;
+
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
+
+  document.getElementById("alertMessage").textContent =
+    "Voice alerts muted.";
+}
 
 </script>
 </body>
